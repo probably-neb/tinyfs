@@ -170,6 +170,7 @@ int tfs_mount(char *diskname) {
         fail(TFS_ERR_ALREADY_MOUNTED);
     int disk = openDisk(diskname, 0);
     fail_if(disk);
+    fail_if(tfs_checkConsistency());
     char block_super[BLOCKSIZE] = {0};
     fail_if(readBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super));
     if (block_super[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_SUPER)
@@ -636,6 +637,41 @@ struct tfs_stat tfs_readFileInfo(fileDescriptor FD) {
 
     memcpy(tmp.name, file_meta->name, TFS_FILE_NAME_LEN_MAX);
     return tmp;
+}
+
+int tfs_checkConsistency() {
+    if (!tfs_meta.mounted)
+        return TFS_ERR_NOT_MOUNTED;
+
+    int block_count = 0;
+    /* check magic */ {
+        char block_tmp[BLOCKSIZE];
+        int block_index = 0;
+        while (readBlock(tfs_meta.disk, block_index, block_tmp) >= 0) {
+            if (block_tmp[TFS_BLOCK_EVERY_POS_MAGIC] != TFS_BLOCK_MAGIC)
+                return TFS_ERR_INVALID;
+            block_index++;
+            block_count++;
+        }
+    }
+    char block_super[BLOCKSIZE];
+    fail_if(readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
+    if (block_super[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_SUPER)
+        return TFS_ERR_INVALID;
+    /* check indode sizes */ {
+        char block_inode[BLOCKSIZE];
+        int block_index = 0;
+        while (readBlock(tfs_meta.disk, block_index, block_inode) >= 0) {
+            if (block_inode[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_INODE)
+                continue;
+            if (tfs_read_size(block_inode) > TFS_BLOCK__FILE_SIZE_DATA)
+                return TFS_ERR_INVALID;
+
+            block_index++;
+        }
+    }
+
+
 }
 
 /******************************************************/
