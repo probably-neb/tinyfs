@@ -555,6 +555,7 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
             fail_if(readBlock(tfs_meta.disk, inode_index, block_inode_init));
 
             tfs_write_tstamp_now(block_inode_init, TSTAMP_ACCESS);
+            fail_if(writeBlock(tfs_meta.disk, inode_index, block_inode_init));
         }
     }
     char block[BLOCKSIZE];

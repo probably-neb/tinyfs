@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#include "libTinyFS.c"
 #include "libTinyFS.h"
 #include "tinyFS.h"
 
@@ -17,6 +18,7 @@ int main() {
         perror("Error mounting file system\n");
         exit(1);
     }
+    printf("Consistency Check Passed!!\n");
 	char name[4096] = {0};
 	char input[4096] = {0};
 	char paddedInput[4096] = {0}; /* no buffer overflows allowed unless you type in 8k characters then they are completely allowed */
@@ -37,9 +39,9 @@ int main() {
 	printf("Printing File info...\n");
 	printf("File name: %s\n", info.name);
 	printf("File size: %d\n", info.size);
-	printf("File Creation Time: %s\n", ctime(&info.ctime));
-    printf("File Modification Time: %s\n", ctime(&info.mtime));
-    printf("File Access Time: %s\n", ctime(&info.atime));
+	printf("File Creation Time: %s", ctime(&info.ctime));
+    printf("File Modification Time: %s", ctime(&info.mtime));
+    printf("File Access Time: %s", ctime(&info.atime));
 
 	{
 		printf("Reading file contents: \n");
@@ -48,5 +50,11 @@ int main() {
 			printf("%c", buf);
 		}
 	}
+    printf("\n");
+    info = tfs_readFileInfo(fd);
+    printf("Printing Updated File info...\n");
+	printf("File Creation Time: %s", ctime(&info.ctime));
+    printf("File Modification Time: %s", ctime(&info.mtime));
+    printf("File Access Time: %s", ctime(&info.atime));
 
 }

@@ -3,8 +3,8 @@ CFLAGS = -Wall -g
 PROG = tinyFSDemo
 OBJS = tinyFSDemo.o libTinyFS.o libDisk.o
 
-$(PROG): $(OBJS)
-	$(CC) $(CFLAGS) -o $(PROG) $(OBJS)
+$(PROG):
+	gcc -o tinyFSDemo tinyFSDemo.c libTinyFS.c libDisk.c
 
 tinyFsDemo.o: tinyFSDemo.c libTinyFS.h tinyFS.h TinyFS_errno.h
 	$(CC) $(CFLAGS) -c -o $@ $<
