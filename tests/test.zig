@@ -376,7 +376,7 @@ test "multiple smol files" {
     const fd_file_2 = tinyFS.tfs_openFile(file_2_name);
     assert_eq(errno_from(tinyFS.tfs_writeFile(fd_file_2, &sub_block_data, @intCast(sub_block_data.len))), .SUCCESS, "tfs_writeFile failed\n", .{});
     assert_eq(tinyFS.tfs_free_block_count(), 5, "tfs_free_block_count failed\n", .{});
-    // tinyFS.hexdump_all_blocks();
+    tinyFS.hexdump_all_blocks();
     assert_eq(errno_from(tinyFS.tfs_deleteFile(fd_file_2)), .SUCCESS, "tfs_deleteFile failed\n", .{});
     assert_eq(errno_from(tinyFS.tfs_closeFile(fd_file_2)), .SUCCESS, "tfs_closeFile failed\n", .{});
     // tinyFS.hexdump_all_blocks();
@@ -386,6 +386,53 @@ test "multiple smol files" {
     assert_eq(errno_from(fd_2), .SUCCESS, "tfs_openFile failed\n", .{});
     var read_data = try read_file(fd_2, sub_block_data.len);
     assert(std.mem.eql(u8, &sub_block_data, &read_data), "read_data == multi_block_data\n", .{});
+
+    assert_eq(errno_from(tinyFS.tfs_unmount()), .SUCCESS, "tfs_unmount failed\n", .{});
+}
+
+test "time" {
+    if (true) {
+        return error.SkipZigTest;
+    }
+    const t = tinyFS.time_t;
+
+    std.debug.print("{}\n", .{t});
+}
+
+test "stat" {
+    var fs_file = try mkfs("mount.tfs", tinyFS.BLOCKSIZE * 10);
+    var fs_file_ptr: [*:0]u8 = &fs_file;
+
+    assert_eq(errno_from(tinyFS.tfs_mount(fs_file_ptr)), .SUCCESS, "tfs_mount failed\n", .{});
+
+    var file_name: [*c]u8 = @constCast("file1");
+    const fd = tinyFS.tfs_openFile(file_name);
+    assert_eq(errno_from(fd), .SUCCESS, "tfs_openFile failed\n", .{});
+    {
+        var data: u8 = 0;
+        assert_eq(errno_from(tinyFS.tfs_readByte(fd, &data)), .RANGE, "tfs_readbyte succeeded when file has no size", .{});
+    }
+
+    var multi_block_data: [DATASIZE * 4]u8 = undefined;
+    @memset(&multi_block_data, 0x42);
+
+    assert_eq(errno_from(tinyFS.tfs_writeFile(fd, &multi_block_data, @intCast(multi_block_data.len))), .SUCCESS, "tfs_writeFile failed\n", .{});
+    assert_eq(tinyFS.tfs_free_block_count(), 4, "tfs_free_block_count failed\n", .{});
+
+    assert_eq(errno_from(tinyFS.tfs_deleteFile(fd)), .SUCCESS, "tfs_deleteFile failed\n", .{});
+    assert_eq(errno_from(tinyFS.tfs_writeFile(fd, &multi_block_data, @intCast(multi_block_data.len))), .SUCCESS, "tfs_writeFile failed\n", .{});
+
+    var read_data = try read_file(fd, multi_block_data.len);
+    assert(std.mem.eql(u8, &multi_block_data, &read_data), "read_data == multi_block_data\n", .{});
+
+    tinyFS.hexdump_all_blocks();
+    const stat_info = tinyFS.tfs_readFileInfo(fd);
+    assert_eq(errno_from(stat_info.err), .SUCCESS, "stat failed\n", .{});
+    // const name = std.mem.span(@as([*c]const u8, @ptrCast(stat_info.name[0..].ptr)));
+    // std.debug.print("{s} -> {s}\n", .{ stat_info.name, name });
+    // assert(std.mem.eql(u8, "file1", name), "name not equal got {s}\n", .{name});
+
+    assert_eq(stat_info.size, multi_block_data.len, "size not equal got {d}\n", .{stat_info.size});
 
     assert_eq(errno_from(tinyFS.tfs_unmount()), .SUCCESS, "tfs_unmount failed\n", .{});
 }

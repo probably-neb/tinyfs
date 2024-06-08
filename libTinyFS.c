@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "libDisk.h"
 #include "libTinyFS.h"
@@ -21,16 +22,21 @@
 
 #define TFS_BLOCK_SUPER_INDEX 0
 
+#define TFS_BLOCK__FILE_SIZE_DATA 252
+#define TFS_BLOCK_INODE_SIZE_SIZE 2
+#define TFS_BLOCK_INODE_SIZE_NAME 9
+#define TFS_BLOCK_INODE_SIZE_TIME 8
+
 #define TFS_BLOCK_EVERY_POS__TYPE 0
 #define TFS_BLOCK_EVERY_POS_MAGIC 1
 #define TFS_BLOCK_EVERY_POS__ADDR 2
 #define TFS_BLOCK__FILE_POS__DATA 4
 #define TFS_BLOCK_INODE_POS__SIZE 4
 #define TFS_BLOCK_INODE_POS__NAME 6
+#define TFS_BLOCK_INODE_POS_MTIME (TFS_BLOCK_INODE_POS__NAME + TFS_BLOCK_INODE_SIZE_NAME)
+#define TFS_BLOCK_INODE_POS_ATIME (TFS_BLOCK_INODE_POS_MTIME + TFS_BLOCK_INODE_SIZE_TIME)
+#define TFS_BLOCK_INODE_POS_CTIME (TFS_BLOCK_INODE_POS_ATIME + TFS_BLOCK_INODE_SIZE_TIME)
 
-#define TFS_BLOCK__FILE_SIZE_DATA 252
-#define TFS_BLOCK_INODE_SIZE_SIZE 2
-#define TFS_BLOCK_INODE_SIZE_NAME 9
 
 #ifndef FAIL_MACRO
 #define FAIL_MACRO
@@ -38,7 +44,7 @@
     errno = -err; \
     return err; \
     } while (0)
-#define fail_if(cond, err) if (cond) fail(err)
+#define fail_if(err) if (err < 0) fail(err)
 #endif
 
 #ifndef DBG_MACRO
@@ -76,12 +82,31 @@
 
 typedef uint16_t addr_t;
 
+enum tstamp {
+    TSTAMP_CREATE,
+    TSTAMP_ACCESS,
+    TSTAMP_MODIFY,
+};
+
+struct tfs_stat {
+    int err;
+    uint16_t size;
+    char name[TFS_FILE_NAME_LEN_MAX + 1];
+    time_t ctime;
+    time_t atime;
+    time_t mtime;
+};
+
 void tfs_write_addr(char* block, addr_t addr);
 addr_t tfs_read_addr(char* block);
 void tfs_write_size(char* block, addr_t addr);
 addr_t tfs_read_size(char* block);
 void hexdump_block(char* block);
 void hexdump_all_blocks();
+void tfs_write_tstamp(char* block, enum tstamp tstamp, time_t t);
+void tfs_write_tstamp_now(char* block, enum tstamp tstamp);
+uint64_t tfs_read_tstamp(char* block, enum tstamp tstamp);
+void tfs_read_tstamp_into(char* block, enum tstamp tstamp, uint64_t* t);
 
 static struct {
     bool mounted;
@@ -105,8 +130,7 @@ static struct tfs_openfile tfs_openfile_table[TFS_OPEN_FILES_MAX] = {0};
 /* Makes a blank TinyFS file system of size nBytes on the unix file specified by ‘filename’. This function should use the emulated disk library to open the specified unix file, and upon success, format the file to be a mountable disk. This includes initializing all data to 0x00, setting magic numbers, initializing and writing the superblock and inodes, etc. Must return a specified success/error code. */
 int tfs_mkfs(char *filename, int nBytes) {
     int disk = openDisk(filename, nBytes);
-    if (disk < 0)
-        return TFS_ERR_TODO;
+    fail_if(disk);
 
     int block_count = (nBytes - (nBytes % BLOCKSIZE)) / BLOCKSIZE;
 
@@ -120,8 +144,7 @@ int tfs_mkfs(char *filename, int nBytes) {
         if (block_index + 1 != block_count)
             next_block_index = block_index + 1;
         tfs_write_addr(block_default, next_block_index);
-        if (writeBlock(disk, block_index, block_default) < 0)
-            return TFS_ERR_TODO;
+        fail_if(writeBlock(disk, block_index, block_default));
     }
 
     char block_super[BLOCKSIZE] = {0};
@@ -133,13 +156,11 @@ int tfs_mkfs(char *filename, int nBytes) {
         first_free_block_index = 1;
     tfs_write_addr(block_super, first_free_block_index);
 
-    if (writeBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super));
 
-    if (closeDisk(disk) < 0)
-        return TFS_ERR_TODO;
+    fail_if(closeDisk(disk));
 
-    return 0;
+    return TFS_OK;
 }
 
  
@@ -148,28 +169,25 @@ int tfs_mount(char *diskname) {
     if (tfs_meta.mounted == true)
         fail(TFS_ERR_ALREADY_MOUNTED);
     int disk = openDisk(diskname, 0);
-    if (disk < 0)
-        return TFS_ERR_TODO;
+    fail_if(disk);
     char block_super[BLOCKSIZE] = {0};
-    if (readBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super));
     if (block_super[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_SUPER)
         return TFS_ERR_NO_DISK;
     if (block_super[TFS_BLOCK_EVERY_POS_MAGIC] != TFS_BLOCK_MAGIC)
-        return TFS_ERR_TODO;
+        return TFS_ERR_INVALID;
     tfs_meta.mounted = true;
     tfs_meta.disk = disk;
-    return 0;
+    return TFS_OK;
 }
 
 /*  tfs_unmount(void) "unmounts" the currently mounted file system */
 int tfs_unmount(void) {
     if (!tfs_meta.mounted)
         return TFS_ERR_NOT_MOUNTED;
-    if (closeDisk(tfs_meta.disk) < 0)
-        return TFS_ERR_TODO;
+    fail_if(closeDisk(tfs_meta.disk));
     tfs_meta.mounted = false;
-    return 0;
+    return TFS_OK;
 }
  
 /* Creates or Opens a file for reading and writing on the currently mounted file system. Creates a dynamic resource table entry for the file, and returns a file descriptor (integer) that can be used to reference this entry while the filesystem is mounted. */
@@ -231,15 +249,13 @@ fileDescriptor tfs_openFile(char *name) {
     char block_super[BLOCKSIZE];
     char block_inode[BLOCKSIZE];
 
-    if (readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
 
     addr_t inode_index = tfs_read_addr(block_super);
     if (inode_index == 0)
         return TFS_ERR_NO_FREE_BLOCKS;
 
-    if (readBlock(tfs_meta.disk, inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, inode_index, block_inode));
     // printf("inode index = %d\n", inode_index);
     // hexdump_block(block_inode);
     assert(block_inode[TFS_BLOCK_EVERY_POS__TYPE] == TFS_BLOCK_TYPE__FREE, "block type is not free");
@@ -247,16 +263,20 @@ fileDescriptor tfs_openFile(char *name) {
     // update super next free block index
     tfs_write_addr(block_super, tfs_read_addr(block_inode));
     // printf("next free block index: %d inode=%d\n", tfs_read_addr(block_super), inode_index);
-    if (writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
 
     // format inode block
     tfs_write_size(block_inode, 0);
     tfs_write_addr(block_inode, 0);
+    {
+        time_t t = time(NULL);
+        tfs_write_tstamp(block_inode, TSTAMP_CREATE, t);
+        tfs_write_tstamp(block_inode, TSTAMP_ACCESS, t);
+        tfs_write_tstamp(block_inode, TSTAMP_MODIFY, t);
+    }
     block_inode[TFS_BLOCK_EVERY_POS__TYPE] = TFS_BLOCK_TYPE_INODE;
     memcpy(&block_inode[TFS_BLOCK_INODE_POS__NAME], name, name_len);
-    if (writeBlock(tfs_meta.disk, inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, inode_index, block_inode));
 
 
     // format file_meta
@@ -301,13 +321,24 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     char name[TFS_FILE_NAME_LEN_MAX + 1] = {0};
     strncpy(name, tfs_openfile_table[FD].name, TFS_FILE_NAME_LEN_MAX);
 
+    uint64_t ctime = 0;
+    /* save ctime */ {
+        int inode_index = tfs_openfile_table[FD].inode_index;
+        if (inode_index != 0) {
+            char block_inode_init[BLOCKSIZE];
+            fail_if(readBlock(tfs_meta.disk, inode_index, block_inode_init));
+
+            tfs_read_tstamp_into(block_inode_init, TSTAMP_CREATE, &ctime);
+        }
+    }
+
     struct tfs_openfile* file_meta = &tfs_openfile_table[FD];
 
     if (file_meta->inode_index != 0)
-        if ((err = tfs_deleteFile(FD)) < 0)
-            return err;
-    if ((err = tfs_closeFile(FD)) < 0)
-        return err;
+        fail_if(tfs_deleteFile(FD));
+        // if ((err = tfs_deleteFile(FD)) < 0)
+        //     return err;
+    fail_if(tfs_closeFile(FD));
     
     fileDescriptor new_FD = tfs_openFile(name);
     // {
@@ -323,8 +354,9 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
         // copy new meta to old meta
         memcpy(&tfs_openfile_table[FD], &tfs_openfile_table[new_FD], sizeof(struct tfs_openfile));
         // close old fd
-        if ((err = tfs_closeFile(new_FD)) < 0)
-            return err;
+        fail_if(tfs_closeFile(new_FD));
+        // if ((err = tfs_closeFile(new_FD)) < 0)
+        //     return err;
     }
 
 
@@ -344,12 +376,12 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     assert(total_block_count >= 1, "no blocks");
 
     char block_inode[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, file_meta->inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, file_meta->inode_index, block_inode));
+    // if (readBlock(tfs_meta.disk, file_meta->inode_index, block_inode) < 0)
+    //     return TFS_ERR_TODO;
 
     char block_super[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
 
     // printf("block super\n");
     // hexdump_block(block_super);
@@ -387,39 +419,52 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     int written_blocks_count = 0;
     while (written_blocks_count < full_block_count) {
         char block[BLOCKSIZE];
-        if (readBlock(tfs_meta.disk, block_index, block) < 0)
-            return TFS_ERR_TODO;
+        fail_if(readBlock(tfs_meta.disk, block_index, block));
         block[TFS_BLOCK_EVERY_POS__TYPE] = TFS_BLOCK_TYPE__DATA;
         char* block_data = &buffer[written_blocks_count * TFS_BLOCK__FILE_SIZE_DATA];
         memcpy(&block[TFS_BLOCK__FILE_POS__DATA], block_data, TFS_BLOCK__FILE_SIZE_DATA);
-        if (writeBlock(tfs_meta.disk, block_index, block) < 0)
-            return TFS_ERR_TODO;
+        fail_if(writeBlock(tfs_meta.disk, block_index, block));
+        // if (writeBlock(tfs_meta.disk, block_index, block) < 0)
+        //     return TFS_ERR_TODO;
         block_index = tfs_read_addr(block);
         written_blocks_count++;
     }
 
     int last_block_index = block_index;
     char block_last[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, last_block_index, block_last) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, last_block_index, block_last));
+    // if (readBlock(tfs_meta.disk, last_block_index, block_last) < 0)
+    //     return TFS_ERR_TODO;
     addr_t next_free_block_index = tfs_read_addr(block_last);
     tfs_write_addr(block_last, 0);
     block_last[TFS_BLOCK_EVERY_POS__TYPE] = TFS_BLOCK_TYPE__DATA;
     char* block_data = &buffer[full_block_count * TFS_BLOCK__FILE_SIZE_DATA];
     assert(last_block_size <= TFS_BLOCK__FILE_SIZE_DATA, "last block size is too big");
     memcpy(&block_last[TFS_BLOCK__FILE_POS__DATA], block_data, last_block_size);
-    if (writeBlock(tfs_meta.disk, last_block_index, block_last) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, last_block_index, block_last));
+    // if (writeBlock(tfs_meta.disk, last_block_index, block_last) < 0)
+    //     return TFS_ERR_TODO;
 
     tfs_write_addr(block_super, next_free_block_index);
-    if (writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
+    // if (writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
+    //     return TFS_ERR_TODO;
 
+    {
+        time_t t= time(NULL);
+        time_t new_ctime = t;
+        if (ctime != 0)
+            new_ctime = ctime;
+        tfs_write_tstamp(block_inode, TSTAMP_CREATE, new_ctime);
+        tfs_write_tstamp(block_inode, TSTAMP_ACCESS, t);
+        tfs_write_tstamp(block_inode, TSTAMP_MODIFY, t);
+    }
     // save updated inode
-    if (writeBlock(tfs_meta.disk, file_meta->inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, file_meta->inode_index, block_inode));
+    // if (writeBlock(tfs_meta.disk, file_meta->inode_index, block_inode) < 0)
+    //     return TFS_ERR_TODO;
 
-    return 0;
+    return TFS_OK;
 }
  
 /* deletes a file and marks its blocks as free on disk. */
@@ -447,14 +492,12 @@ int tfs_deleteFile(fileDescriptor FD) {
     // file->inode_index = 0;
 
     char block_inode[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, inode_index, block_inode));
     assert(block_inode[TFS_BLOCK_EVERY_POS__TYPE] == TFS_BLOCK_TYPE_INODE, "block type is not inode");
     assert(block_inode[TFS_BLOCK_EVERY_POS_MAGIC] == TFS_BLOCK_MAGIC, "block magic is not correct");
 
     char block_super[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
     assert(block_super[TFS_BLOCK_EVERY_POS__TYPE] == TFS_BLOCK_TYPE_SUPER, "block type is not super");
     addr_t first_free_block_index = tfs_read_addr(block_super);
 
@@ -462,8 +505,7 @@ int tfs_deleteFile(fileDescriptor FD) {
 
     while (block_index != 0) {
         char block[BLOCKSIZE];
-        if (readBlock(tfs_meta.disk, block_index, block) < 0)
-            return TFS_ERR_TODO;
+        fail_if(readBlock(tfs_meta.disk, block_index, block));
         // printf("before\n");
         // hexdump_block(block);
         assert(block[TFS_BLOCK_EVERY_POS__TYPE] == TFS_BLOCK_TYPE__DATA, "block type is not data");
@@ -479,8 +521,9 @@ int tfs_deleteFile(fileDescriptor FD) {
 
         // printf("after\n");
         // hexdump_block(block);
-        if (writeBlock(tfs_meta.disk, block_index, block) < 0)
-            return TFS_ERR_TODO;
+        fail_if(writeBlock(tfs_meta.disk, block_index, block));
+        // if (writeBlock(tfs_meta.disk, block_index, block) < 0)
+        //     return TFS_ERR_TODO;
         block_index = next_block_index;
     }
 
@@ -493,14 +536,12 @@ int tfs_deleteFile(fileDescriptor FD) {
     // printf("changing inode block at %d ptr from %d -> %d\n", inode_index, tfs_read_addr(block_inode), block_index);
     if (tfs_read_addr(block_inode) == 0)
         tfs_write_addr(block_inode, block_index);
-    if (writeBlock(tfs_meta.disk, inode_index, block_inode) < 0)
-        return TFS_ERR_TODO;
+    fail_if(writeBlock(tfs_meta.disk, inode_index, block_inode));
 
     assert(inode_index != 0, "inode index is zero");
     tfs_write_addr(block_super, inode_index);
-    if (writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
-    return 0;
+    fail_if(writeBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
+    return TFS_OK;
 }
 
 /* reads one byte from the file and copies it to buffer, using the current file pointer location and incrementing it by one upon success. If the file pointer is already past the end of the file then tfs_readByte() should return an error and not increment the file pointer. */ 
@@ -515,9 +556,17 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
     if (file_meta->ptr.block_num == file_meta->inode_index)
         return TFS_ERR_OUT_OF_BOUNDS;
 
+    /* update atime */ {
+        int inode_index = file_meta->inode_index;
+        if (inode_index != 0) {
+            char block_inode_init[BLOCKSIZE];
+            fail_if(readBlock(tfs_meta.disk, inode_index, block_inode_init));
+
+            tfs_write_tstamp_now(block_inode_init, TSTAMP_ACCESS);
+        }
+    }
     char block[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, file_meta->ptr.block_num, block) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, file_meta->ptr.block_num, block));
     assert(file_meta->ptr.byte_index >= TFS_BLOCK__FILE_POS__DATA, "byte index is before data");
     // assert(file_meta->ptr.byte_index != 255, "file ptr not incremented to next block");
 
@@ -536,7 +585,58 @@ int tfs_readByte(fileDescriptor FD, char *buffer) {
 }
  
 /* change the file pointer location to offset (absolute). Returns success/error codes.*/ 
-int tfs_seek(fileDescriptor FD, int offset); 
+int tfs_seek(fileDescriptor FD, int offset) {
+    if (!tfs_meta.mounted)
+        return TFS_ERR_NOT_MOUNTED;
+    if (!tfs_openfile_table[FD].live)
+        return TFS_ERR_BAD_FD;
+
+    int byte = offset % TFS_BLOCK__FILE_SIZE_DATA;
+    int block = (offset - byte) / TFS_BLOCK__FILE_SIZE_DATA;
+
+    struct tfs_openfile* file_meta = &tfs_openfile_table[FD];
+
+    char block_inode[BLOCKSIZE];
+    fail_if(readBlock(tfs_meta.disk, file_meta->inode_index, block_inode));
+
+    int block_index = tfs_read_addr(block_inode);
+
+    while (block > 0) {
+        char block_tmp[BLOCKSIZE];
+        fail_if(readBlock(tfs_meta.disk, block_index, block_tmp));
+        block_index = tfs_read_addr(block_tmp);
+        block--;
+    }
+
+    file_meta->ptr.block_num = block_index;
+    file_meta->ptr.byte_index = TFS_BLOCK__FILE_POS__DATA + byte;
+    return TFS_OK;
+}
+
+struct tfs_stat tfs_readFileInfo(fileDescriptor FD) {
+    if (!tfs_meta.mounted)
+        return (struct tfs_stat){.err = TFS_ERR_NOT_MOUNTED, 0};
+    if (!tfs_openfile_table[FD].live)
+        return (struct tfs_stat){.err = TFS_ERR_BAD_FD, 0};
+
+    struct tfs_openfile* file_meta = &tfs_openfile_table[FD];
+    char block_inode[BLOCKSIZE];
+    int res = readBlock(tfs_meta.disk, file_meta->inode_index, block_inode);
+    if (res < 1)
+        return (struct tfs_stat){.err = res, 0};
+
+    struct tfs_stat tmp = (struct tfs_stat){
+        .err = TFS_OK,
+        .size = tfs_read_size(block_inode),
+        .ctime = tfs_read_tstamp(block_inode, TSTAMP_CREATE),
+        .atime = tfs_read_tstamp(block_inode, TSTAMP_ACCESS),
+        .mtime = tfs_read_tstamp(block_inode, TSTAMP_MODIFY),
+        0
+    };
+
+    memcpy(tmp.name, file_meta->name, TFS_FILE_NAME_LEN_MAX);
+    return tmp;
+}
 
 /******************************************************/
 /****************** Helper functions ******************/
@@ -610,8 +710,7 @@ int tfs_free_block_count() {
     if (!tfs_meta.mounted)
         return TFS_ERR_NOT_MOUNTED;
     char block_super[BLOCKSIZE];
-    if (readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super) < 0)
-        return TFS_ERR_TODO;
+    fail_if(readBlock(tfs_meta.disk, TFS_BLOCK_SUPER_INDEX, block_super));
     addr_t next_free_block_index = tfs_read_addr(block_super);
 
     int free_block_count = 0;
@@ -629,4 +728,45 @@ int tfs_free_block_count() {
         next_free_block_index = tfs_read_addr(block);
     }
     return free_block_count;
+}
+
+void tfs_write_tstamp(char* block, enum tstamp tstamp, time_t t) {
+    int index = 0;
+    if (tstamp == TSTAMP_CREATE) {
+        index = TFS_BLOCK_INODE_POS_CTIME;
+    } else if (tstamp == TSTAMP_ACCESS) {
+        index = TFS_BLOCK_INODE_POS_ATIME;
+    } else if (tstamp == TSTAMP_MODIFY) {
+        index = TFS_BLOCK_INODE_POS_MTIME;
+    } else {
+        panic("invalid tstamp %d", tstamp);
+    }
+    uint64_t t64 = t;
+    assert(sizeof(uint64_t) == 8, "uint64_t is not 8 bytes");
+    memcpy(&block[index], &t64, sizeof(uint64_t));
+}
+
+void tfs_write_tstamp_now(char* block, enum tstamp tstamp) {
+    time_t t = time(NULL);
+    tfs_write_tstamp(block, tstamp, t);
+}
+
+uint64_t tfs_read_tstamp(char* block, enum tstamp tstamp) {
+    int index = 0;
+    if (tstamp == TSTAMP_CREATE) {
+        index = TFS_BLOCK_INODE_POS_CTIME;
+    } else if (tstamp == TSTAMP_ACCESS) {
+        index = TFS_BLOCK_INODE_POS_ATIME;
+    } else if (tstamp == TSTAMP_MODIFY) {
+        index = TFS_BLOCK_INODE_POS_MTIME;
+    } else {
+        panic("invalid tstamp %d", tstamp);
+    }
+    uint64_t t;
+    memcpy(&t, &block[index], sizeof(uint64_t));
+    return t;
+}
+
+void tfs_read_tstamp_into(char* block, enum tstamp tstamp, uint64_t* t) {
+    *t = tfs_read_tstamp(block, tstamp);
 }
