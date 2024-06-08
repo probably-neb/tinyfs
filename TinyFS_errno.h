@@ -1,0 +1,20 @@
+#ifndef TINYFS_ERRNO_H
+#define TINYFS_ERRNO_H
+
+#include <errno.h>
+
+#define TFS_OK 0
+#define TFS_ERR_SUCCESS 0
+#define TFS_ERR_TODO (-(EPERM))
+#define TFS_ERR_ALREADY_MOUNTED (-(EBUSY))
+#define TFS_ERR_NO_DISK (-(ENOENT))
+#define TFS_ERR_OUT_OF_BOUNDS (-(ERANGE))
+#define TFS_ERR_TOO_MANY_FILES (-(ENFILE))
+#define TFS_ERR_NOT_MOUNTED (-(ENODEV))
+#define TFS_ERR_BAD_FD (-(EBADF))
+#define TFS_ERR_NO_FREE_BLOCKS (-(ENOSPC))
+#define TFS_ERR_INSUFFICIENT_SPACE (-(EOVERFLOW))
+#define TFS_ERR_FILE_NAME_TOO_LONG (-(ENAMETOOLONG))
+#define TFS_ERR_INVALID (-(EINVAL))
+
+#endif
