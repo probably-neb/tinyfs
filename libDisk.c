@@ -41,7 +41,7 @@ int openDisk(char *filename, int nBytes) {
     }
     int flags = O_RDWR;
     if (nBytes != 0) {
-        flags |= O_CREAT;
+        flags = flags | O_CREAT;
     }
     int fd = open(filename, flags, S_IRUSR | S_IWUSR);
     if (fd < 0) {
@@ -54,7 +54,7 @@ int openDisk(char *filename, int nBytes) {
     // set file len to nBytes
     // note: before adjusting nBytes by block size
     if (nBytes != 0 && ftruncate(fd, nBytes) < 0)
-        return -1;
+        return -(errno);
 
     // if (nBytes == 0) {
     //     return fd;

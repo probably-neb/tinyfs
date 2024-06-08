@@ -51,4 +51,20 @@ int tfs_seek(fileDescriptor FD, int offset);
 /* change the file pointer location to offset (absolute). Returns 
 success/error codes.*/ 
 
+#include <time.h>
+#include <stdint.h>
+
+struct tfs_stat {
+    int err;
+    uint16_t size;
+    char name[9];
+    time_t ctime;
+    time_t atime;
+    time_t mtime;
+};
+
+struct tfs_stat tfs_readFileInfo(fileDescriptor FD);
+
+int tfs_checkConsistency();
+
 #endif

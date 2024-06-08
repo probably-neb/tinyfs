@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdio.h>
 
 #include "libDisk.h"
 #include "libTinyFS.h"
@@ -88,15 +89,6 @@ enum tstamp {
     TSTAMP_MODIFY,
 };
 
-struct tfs_stat {
-    int err;
-    uint16_t size;
-    char name[TFS_FILE_NAME_LEN_MAX + 1];
-    time_t ctime;
-    time_t atime;
-    time_t mtime;
-};
-
 void tfs_write_addr(char* block, addr_t addr);
 addr_t tfs_read_addr(char* block);
 void tfs_write_size(char* block, addr_t addr);
@@ -170,7 +162,6 @@ int tfs_mount(char *diskname) {
         fail(TFS_ERR_ALREADY_MOUNTED);
     int disk = openDisk(diskname, 0);
     fail_if(disk);
-    fail_if(tfs_checkConsistency());
     char block_super[BLOCKSIZE] = {0};
     fail_if(readBlock(disk, TFS_BLOCK_SUPER_INDEX, block_super));
     if (block_super[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_SUPER)
@@ -179,6 +170,7 @@ int tfs_mount(char *diskname) {
         return TFS_ERR_INVALID;
     tfs_meta.mounted = true;
     tfs_meta.disk = disk;
+    fail_if(tfs_checkConsistency());
     return TFS_OK;
 }
 
@@ -318,7 +310,6 @@ int tfs_writeFile(fileDescriptor FD, char *buffer, int size) {
     //     printf("block super -> %d\n", tfs_read_addr(block_super_tmp));
     // }
 
-    int err;
     char name[TFS_FILE_NAME_LEN_MAX + 1] = {0};
     strncpy(name, tfs_openfile_table[FD].name, TFS_FILE_NAME_LEN_MAX);
 
@@ -616,24 +607,24 @@ int tfs_seek(fileDescriptor FD, int offset) {
 
 struct tfs_stat tfs_readFileInfo(fileDescriptor FD) {
     if (!tfs_meta.mounted)
-        return (struct tfs_stat){.err = TFS_ERR_NOT_MOUNTED, 0};
+        return (struct tfs_stat){.err = TFS_ERR_NOT_MOUNTED};
     if (!tfs_openfile_table[FD].live)
-        return (struct tfs_stat){.err = TFS_ERR_BAD_FD, 0};
+        return (struct tfs_stat){.err = TFS_ERR_BAD_FD};
 
     struct tfs_openfile* file_meta = &tfs_openfile_table[FD];
     char block_inode[BLOCKSIZE];
+    if (file_meta->inode_index == 0)
+        return (struct tfs_stat){.err = TFS_ERR_BAD_FD};
     int res = readBlock(tfs_meta.disk, file_meta->inode_index, block_inode);
-    if (res < 1)
-        return (struct tfs_stat){.err = res, 0};
+    if (res < 0)
+        return (struct tfs_stat){.err = res};
 
-    struct tfs_stat tmp = (struct tfs_stat){
-        .err = TFS_OK,
-        .size = tfs_read_size(block_inode),
-        .ctime = tfs_read_tstamp(block_inode, TSTAMP_CREATE),
-        .atime = tfs_read_tstamp(block_inode, TSTAMP_ACCESS),
-        .mtime = tfs_read_tstamp(block_inode, TSTAMP_MODIFY),
-        0
-    };
+    struct tfs_stat tmp;
+    tmp.err = TFS_OK;
+    tmp.size = tfs_read_size(block_inode);
+    tmp.ctime = tfs_read_tstamp(block_inode, TSTAMP_CREATE);
+    tmp.atime = tfs_read_tstamp(block_inode, TSTAMP_ACCESS);
+    tmp.mtime = tfs_read_tstamp(block_inode, TSTAMP_MODIFY);
 
     memcpy(tmp.name, file_meta->name, TFS_FILE_NAME_LEN_MAX);
     return tmp;
@@ -662,16 +653,16 @@ int tfs_checkConsistency() {
         char block_inode[BLOCKSIZE];
         int block_index = 0;
         while (readBlock(tfs_meta.disk, block_index, block_inode) >= 0) {
+            block_index++;
             if (block_inode[TFS_BLOCK_EVERY_POS__TYPE] != TFS_BLOCK_TYPE_INODE)
                 continue;
             if (tfs_read_size(block_inode) > TFS_BLOCK__FILE_SIZE_DATA)
                 return TFS_ERR_INVALID;
 
-            block_index++;
         }
     }
 
-
+    return TFS_OK;
 }
 
 /******************************************************/
